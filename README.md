@@ -1,6 +1,6 @@
 # Intol Axiom 1200 — Opcode Reference
 
-> **Processor:** Intol Axiom 1200 (`10 CON ADV`)
+> **Processor:** Intol Axiom 1200
 > **Opcode format:** `[32-bit namespace] x [32-bit opcode]`
 > **Total opcode space:** ~1.84 × 10¹⁹ operations
 > **Max args:** 64-bit
