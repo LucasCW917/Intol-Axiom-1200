@@ -67,9 +67,11 @@ typedef struct VMThread {
 
 /* ── Call frame (for DEF/TAKE/RET) ───────────────────────── */
 typedef struct CallFrame {
-    Program *program;     /* the function's program          */
-    size_t   ret_ip;      /* return instruction pointer      */
-    Program *ret_program; /* return program context          */
+    Program *program;             /* the function's program          */
+    size_t   ret_ip;              /* return instruction pointer      */
+    Program *ret_program;         /* return program context          */
+    int      argc;                /* number of args passed           */
+    Arg      args[MAX_ARGS];      /* copies of passed arguments      */
 } CallFrame;
 
 /* ── VM global state ──────────────────────────────────────── */

@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,17 +7,19 @@
 #include "parser.h"
 #include "opcodes.h"
 
-/* ── Token ────────────────────────────────────────────────── */
-typedef struct {
-    char   *text;
-    int     line;
-} Token;
+/* ── Portable case-insensitive compare (no strcasecmp on MinGW) ── */
+static int str_icmp(const char *a, const char *b) {
+    while (*a && *b) {
+        int d = tolower((unsigned char)*a) - tolower((unsigned char)*b);
+        if (d != 0) return d;
+        a++; b++;
+    }
+    return tolower((unsigned char)*a) - tolower((unsigned char)*b);
+}
 
-typedef struct {
-    Token  *toks;
-    size_t  count;
-    size_t  cap;
-} TokenList;
+/* ── Token ────────────────────────────────────────────────── */
+typedef struct { char *text; int line; } Token;
+typedef struct { Token *toks; size_t count; size_t cap; } TokenList;
 
 static void tl_push(TokenList *tl, const char *text, int line) {
     if (tl->count >= tl->cap) {
@@ -36,21 +39,11 @@ static TokenList lex(const char *src) {
     TokenList tl = {0};
     int line = 1;
     const char *p = src;
-
     while (*p) {
-        /* Skip whitespace */
         while (*p == ' ' || *p == '\t' || *p == '\r') p++;
-
         if (*p == '\n') { line++; p++; continue; }
         if (!*p) break;
-
-        /* Comments: ; to end-of-line */
-        if (*p == ';') {
-            while (*p && *p != '\n') p++;
-            continue;
-        }
-
-        /* Quoted string literal */
+        if (*p == ';') { while (*p && *p != '\n') p++; continue; }
         if (*p == '"') {
             p++;
             char buf[4096]; size_t bi = 0;
@@ -69,14 +62,11 @@ static TokenList lex(const char *src) {
             }
             if (*p == '"') p++;
             buf[bi] = '\0';
-            /* wrap in quotes so parser can distinguish */
             char quoted[4100];
             snprintf(quoted, sizeof(quoted), "\"%s\"", buf);
             tl_push(&tl, quoted, line);
             continue;
         }
-
-        /* Regular token */
         char buf[512]; size_t bi = 0;
         while (*p && !isspace((unsigned char)*p) && *p != ';' && bi < sizeof(buf)-1)
             buf[bi++] = *p++;
@@ -103,7 +93,7 @@ static const OpcodeEntry OPCODE_TABLE[] = {
     {"SAVD",  OP_SAVD}, {"GET",   OP_GET},  {"LEN",   OP_LEN},
     {"NAND",  OP_NAND}, {"NOT",   OP_NOT},  {"AND",   OP_AND},
     {"OR",    OP_OR},   {"NOR",   OP_NOR},  {"XOR",   OP_XOR},
-    {"XNOR",  OP_XNOR}, {"BUF",   OP_BUF}, {"TRY",   OP_TRY},
+    {"XNOR",  OP_XNOR}, {"BUF",  OP_BUF},  {"TRY",   OP_TRY},
     {"THW",   OP_THW},  {"GTM",   OP_GTM},  {"CTM",   OP_CTM},
     {"STAL",  OP_STAL}, {"FORK",  OP_FORK}, {"JOIN",  OP_JOIN},
     {"LOCK",  OP_LOCK}, {"UNLO",  OP_UNLO}, {"AADD",  OP_AADD},
@@ -118,7 +108,7 @@ static const OpcodeEntry OPCODE_TABLE[] = {
 
 static uint64_t lookup_opcode(const char *name, bool *found) {
     for (int i = 0; OPCODE_TABLE[i].name; i++) {
-        if (strcasecmp(OPCODE_TABLE[i].name, name) == 0) {
+        if (str_icmp(OPCODE_TABLE[i].name, name) == 0) {
             *found = true;
             return OPCODE_TABLE[i].opcode;
         }
@@ -128,11 +118,8 @@ static uint64_t lookup_opcode(const char *name, bool *found) {
 }
 
 /* ── Arg parser ───────────────────────────────────────────── */
-/* Parse one token into an Arg. Returns false on parse error. */
 static bool parse_arg(const char *tok, Arg *out) {
     memset(out, 0, sizeof(*out));
-
-    /* Quoted string literal */
     if (tok[0] == '"') {
         size_t len = strlen(tok);
         char *inner = strndup(tok + 1, len >= 2 ? len - 2 : 0);
@@ -140,100 +127,67 @@ static bool parse_arg(const char *tok, Arg *out) {
         out->u.imm_str = inner;
         return true;
     }
-
-    /* Register types: R0, C0, S0, L0, D0, T0 */
     if ((tok[0]=='R'||tok[0]=='r') && isdigit((unsigned char)tok[1])) {
-        out->type = ARG_REG_R;
-        out->u.reg_idx = (uint32_t)atoi(tok + 1);
-        return true;
+        out->type = ARG_REG_R; out->u.reg_idx = (uint32_t)atoi(tok+1); return true;
     }
     if ((tok[0]=='C'||tok[0]=='c') && isdigit((unsigned char)tok[1])) {
-        out->type = ARG_REG_C;
-        out->u.reg_idx = (uint32_t)atoi(tok + 1);
-        return true;
+        out->type = ARG_REG_C; out->u.reg_idx = (uint32_t)atoi(tok+1); return true;
     }
     if ((tok[0]=='S'||tok[0]=='s') && isdigit((unsigned char)tok[1])) {
-        out->type = ARG_REG_S;
-        out->u.reg_idx = (uint32_t)atoi(tok + 1);
-        return true;
+        out->type = ARG_REG_S; out->u.reg_idx = (uint32_t)atoi(tok+1); return true;
     }
     if ((tok[0]=='T'||tok[0]=='t') && isdigit((unsigned char)tok[1])) {
-        out->type = ARG_REG_T;
-        out->u.reg_idx = (uint32_t)atoi(tok + 1);
-        return true;
+        out->type = ARG_REG_T; out->u.reg_idx = (uint32_t)atoi(tok+1); return true;
     }
-
-    /* List with index: L0[3] */
     if ((tok[0]=='L'||tok[0]=='l') && isdigit((unsigned char)tok[1])) {
         const char *bracket = strchr(tok, '[');
         if (bracket) {
             out->type = ARG_REG_L_IDX;
-            out->u.list_idx.reg      = (uint32_t)atoi(tok + 1);
-            out->u.list_idx.elem_idx = (uint32_t)atoi(bracket + 1);
+            out->u.list_idx.reg      = (uint32_t)atoi(tok+1);
+            out->u.list_idx.elem_idx = (uint32_t)atoi(bracket+1);
         } else {
-            out->type = ARG_REG_L;
-            out->u.reg_idx = (uint32_t)atoi(tok + 1);
+            out->type = ARG_REG_L; out->u.reg_idx = (uint32_t)atoi(tok+1);
         }
         return true;
     }
-
-    /* Dictionary: D0 */
     if ((tok[0]=='D'||tok[0]=='d') && isdigit((unsigned char)tok[1])) {
-        out->type = ARG_REG_D;
-        out->u.reg_idx = (uint32_t)atoi(tok + 1);
-        return true;
+        out->type = ARG_REG_D; out->u.reg_idx = (uint32_t)atoi(tok+1); return true;
     }
-
-    /* Hex immediate: 0x... */
     if (tok[0]=='0' && (tok[1]=='x'||tok[1]=='X')) {
         out->type = ARG_IMM_INT;
         out->u.imm_int = (int64_t)strtoull(tok, NULL, 16);
         return true;
     }
-
-    /* Decimal immediate (possibly negative) */
     if (isdigit((unsigned char)tok[0]) ||
         (tok[0]=='-' && isdigit((unsigned char)tok[1]))) {
         out->type = ARG_IMM_INT;
         out->u.imm_int = (int64_t)strtoll(tok, NULL, 10);
         return true;
     }
-
-    /* Opcode name used as argument (for DEF, FORK, etc.) */
     bool found = false;
     uint64_t opc = lookup_opcode(tok, &found);
-    if (found) {
-        out->type    = ARG_OPCODE;
-        out->u.opcode = opc;
-        return true;
-    }
-
-    /* Label / identifier */
-    out->type      = ARG_LABEL;
-    out->u.label   = strdup(tok);
+    if (found) { out->type = ARG_OPCODE; out->u.opcode = opc; return true; }
+    out->type    = ARG_LABEL;
+    out->u.label = strdup(tok);
     return true;
 }
 
-/* ── Instruction ──────────────────────────────────────────── */
-
+/* ── Arg helpers ──────────────────────────────────────────── */
 void arg_free(Arg *a) {
     if (!a) return;
-    if (a->type == ARG_IMM_STR)  { free(a->u.imm_str); a->u.imm_str = NULL; }
-    if (a->type == ARG_LABEL)    { free(a->u.label);   a->u.label   = NULL; }
+    if (a->type == ARG_IMM_STR) { free(a->u.imm_str); a->u.imm_str = NULL; }
+    if (a->type == ARG_LABEL)   { free(a->u.label);   a->u.label   = NULL; }
     a->type = ARG_NONE;
 }
 
 Arg arg_clone(const Arg *a) {
     Arg out = *a;
-    if (a->type == ARG_IMM_STR && a->u.imm_str)
-        out.u.imm_str = strdup(a->u.imm_str);
-    if (a->type == ARG_LABEL && a->u.label)
-        out.u.label = strdup(a->u.label);
+    if (a->type == ARG_IMM_STR && a->u.imm_str) out.u.imm_str = strdup(a->u.imm_str);
+    if (a->type == ARG_LABEL   && a->u.label)   out.u.label   = strdup(a->u.label);
     return out;
 }
 
-/* ── Program ──────────────────────────────────────────────── */
-
+/* ── Program helpers ──────────────────────────────────────── */
 static void prog_push(Program *p, Instruction instr) {
     if (p->count >= p->capacity) {
         p->capacity = p->capacity ? p->capacity * 2 : 64;
@@ -244,8 +198,8 @@ static void prog_push(Program *p, Instruction instr) {
 
 static void prog_add_label(Program *p, const char *name, size_t pos) {
     if (p->label_count >= p->label_cap) {
-        p->label_cap    = p->label_cap ? p->label_cap * 2 : 16;
-        p->label_names     = realloc(p->label_names, p->label_cap * sizeof(char*));
+        p->label_cap       = p->label_cap ? p->label_cap * 2 : 16;
+        p->label_names     = realloc(p->label_names,     p->label_cap * sizeof(char*));
         p->label_positions = realloc(p->label_positions, p->label_cap * sizeof(size_t));
     }
     p->label_names[p->label_count]     = strdup(name);
@@ -281,33 +235,21 @@ void program_free(Program *p) {
     free(p);
 }
 
-/* ── Token stream → Program ───────────────────────────────── */
-
-/*  Opcodes that consume a guarded sub-instruction:
-    IFTR <cond> <instruction...>
-    IFFL <cond> <instruction...>
-    WHLE <cond> <instruction...>                                  */
+/* ── Opcode helpers ───────────────────────────────────────── */
 static bool is_guarding_opcode(uint64_t opc) {
     return opc == OP_IFTR || opc == OP_IFFL || opc == OP_WHLE;
 }
 
-/*  How many args does a given opcode take before the guarded sub-instr?
-    IFTR/IFFL/WHLE each take 1 condition arg then the sub-instruction.   */
-static int guarding_cond_count(uint64_t opc) {
-    (void)opc;
-    return 1;  /* all three take exactly 1 condition register */
-}
-
+/* ── Tokens → Program ─────────────────────────────────────── */
 static Program *tokens_to_program(TokenList *tl) {
     Program *p = calloc(1, sizeof(Program));
     if (!p) return NULL;
 
     size_t i = 0;
     while (i < tl->count) {
-        const char *tok = tl->toks[i].text;
-        int line = tl->toks[i].line;
+        const char *tok  = tl->toks[i].text;
+        int         line = tl->toks[i].line;
 
-        /* Look up opcode */
         bool found = false;
         uint64_t opc = lookup_opcode(tok, &found);
         if (!found) {
@@ -317,43 +259,46 @@ static Program *tokens_to_program(TokenList *tl) {
         }
         i++;
 
-        Instruction instr = { .opcode = opc, .argc = 0, .source_line = line,
-                              .guarded = NULL };
+        Instruction instr;
+        memset(&instr, 0, sizeof(instr));
+        instr.opcode      = opc;
+        instr.source_line = line;
 
-        /* STP: next token is label name */
+        /* STP: register label then emit no-op */
         if (opc == OP_STP) {
             if (i >= tl->count) {
                 fprintf(stderr, "parse error line %d: STP requires a label name\n", line);
                 program_free(p); return NULL;
             }
-            /* Register label pointing to the instruction AFTER STP */
             prog_add_label(p, tl->toks[i].text, p->count);
+            Arg la;
+            memset(&la, 0, sizeof(la));
+            la.type    = ARG_LABEL;
+            la.u.label = strdup(tl->toks[i].text);
+            instr.args[0] = la;
+            instr.argc    = 1;
             i++;
-            /* STP itself is a no-op at runtime; still emit it */
-            Arg la = { .type = ARG_LABEL, .u.label = strdup(p->label_names[p->label_count-1]) };
-            instr.args[0] = la; instr.argc = 1;
             prog_push(p, instr);
             continue;
         }
 
-        /* For guarding opcodes collect condition arg(s) then sub-instruction */
+        /* Guarding opcodes: collect 1 condition arg, then sub-instruction */
         if (is_guarding_opcode(opc)) {
-            int cond_count = guarding_cond_count(opc);
-            for (int c = 0; c < cond_count && i < tl->count; c++, i++) {
-                if (!parse_arg(tl->toks[i].text, &instr.args[instr.argc])) {
-                    fprintf(stderr, "parse error line %d: bad arg '%s'\n",
-                            line, tl->toks[i].text);
-                    program_free(p); return NULL;
-                }
-                instr.argc++;
+            if (i >= tl->count) {
+                fprintf(stderr, "parse error line %d: missing condition for guarding opcode\n", line);
+                program_free(p); return NULL;
             }
+            if (!parse_arg(tl->toks[i].text, &instr.args[0])) {
+                fprintf(stderr, "parse error line %d: bad condition arg '%s'\n", line, tl->toks[i].text);
+                program_free(p); return NULL;
+            }
+            instr.argc = 1;
+            i++;
 
-            /* Sub-instruction: next token must be an opcode */
             if (i >= tl->count) {
                 fprintf(stderr, "parse error line %d: missing guarded instruction\n", line);
                 program_free(p); return NULL;
             }
-
             bool sf = false;
             uint64_t sub_opc = lookup_opcode(tl->toks[i].text, &sf);
             if (!sf) {
@@ -364,21 +309,16 @@ static Program *tokens_to_program(TokenList *tl) {
             i++;
 
             Instruction *sub = calloc(1, sizeof(Instruction));
-            sub->opcode = sub_opc;
+            sub->opcode      = sub_opc;
             sub->source_line = line;
 
-            /* Collect sub-instruction args until end of line or new opcode */
-            while (i < tl->count) {
+            while (i < tl->count && sub->argc < MAX_ARGS) {
                 bool sf2 = false;
                 lookup_opcode(tl->toks[i].text, &sf2);
-                /* Stop if we hit another opcode name that isn't a register */
-                if (sf2 && tl->toks[i].text[0] != 'R' &&
-                           tl->toks[i].text[0] != 'r' &&
-                           tl->toks[i].text[0] != 'S' &&
-                           tl->toks[i].text[0] != 's') {
-                    break;
-                }
-                if (sub->argc >= MAX_ARGS) break;
+                char c0 = tl->toks[i].text[0];
+                if (sf2 && c0!='R' && c0!='r' && c0!='S' && c0!='s' &&
+                           c0!='C' && c0!='c' && c0!='L' && c0!='l' &&
+                           c0!='D' && c0!='d' && c0!='T' && c0!='t') break;
                 Arg a;
                 if (!parse_arg(tl->toks[i].text, &a)) break;
                 sub->args[sub->argc++] = a;
@@ -389,21 +329,15 @@ static Program *tokens_to_program(TokenList *tl) {
             continue;
         }
 
-        /* General case: collect args until we see a new opcode or end */
+        /* General case: collect args until next opcode keyword */
         while (i < tl->count && instr.argc < MAX_ARGS) {
             const char *t = tl->toks[i].text;
-            /* A token that is a known opcode name (but not a register-prefixed word)
-               signals the start of the next instruction */
             bool sf = false;
             lookup_opcode(t, &sf);
-            if (sf && t[0] != 'R' && t[0] != 'r' &&
-                      t[0] != 'S' && t[0] != 's' &&
-                      t[0] != 'C' && t[0] != 'c' &&
-                      t[0] != 'L' && t[0] != 'l' &&
-                      t[0] != 'D' && t[0] != 'd' &&
-                      t[0] != 'T' && t[0] != 't') {
-                break;
-            }
+            char c0 = t[0];
+            if (sf && c0!='R' && c0!='r' && c0!='S' && c0!='s' &&
+                      c0!='C' && c0!='c' && c0!='L' && c0!='l' &&
+                      c0!='D' && c0!='d' && c0!='T' && c0!='t') break;
             Arg a;
             if (!parse_arg(t, &a)) {
                 fprintf(stderr, "parse error line %d: bad arg '%s'\n", line, t);
@@ -412,15 +346,12 @@ static Program *tokens_to_program(TokenList *tl) {
             instr.args[instr.argc++] = a;
             i++;
         }
-
         prog_push(p, instr);
     }
-
     return p;
 }
 
 /* ── Public API ───────────────────────────────────────────── */
-
 Program *program_parse_string(const char *src) {
     TokenList tl = lex(src);
     Program  *p  = tokens_to_program(&tl);
@@ -436,7 +367,7 @@ Program *program_parse_file(const char *path) {
     rewind(f);
     char *buf = malloc(sz + 1);
     if (!buf) { fclose(f); return NULL; }
-    fread(buf, 1, sz, f);
+    if (fread(buf, 1, sz, f) != (size_t)sz) { free(buf); fclose(f); return NULL; }
     buf[sz] = '\0';
     fclose(f);
     Program *p = program_parse_string(buf);

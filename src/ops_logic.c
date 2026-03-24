@@ -22,14 +22,14 @@ bool op_ifnq(VMThread *t, const Instruction *i) {
 bool op_iftr(VMThread *t, const Instruction *i) {
     int64_t cond;
     if (!exec_arg_to_int(t, &i->args[0], &cond)) return false;
-    if (cond == 1 && i->guarded) return exec_step(t, i->guarded);
+    if (cond == 1 && i->guarded) return exec_step(t, (const Instruction *)i->guarded);
     return true;
 }
 
 bool op_iffl(VMThread *t, const Instruction *i) {
     int64_t cond;
     if (!exec_arg_to_int(t, &i->args[0], &cond)) return false;
-    if (cond == 0 && i->guarded) return exec_step(t, i->guarded);
+    if (cond == 0 && i->guarded) return exec_step(t, (const Instruction *)i->guarded);
     return true;
 }
 
@@ -39,7 +39,7 @@ bool op_whle(VMThread *t, const Instruction *i) {
     while (true) {
         if (!exec_arg_to_int(t, &i->args[0], &cond)) return false;
         if (cond != 1) break;
-        if (!exec_step(t, i->guarded)) return false;
+        if (!exec_step(t, (const Instruction *)i->guarded)) return false;
         if (t->status != VM_OK) return false;
     }
     return true;
